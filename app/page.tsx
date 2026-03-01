@@ -59,7 +59,7 @@ export default function PortfolioApp() {
   const [cash, setCash] = useState([
     { id: 'c1', currency: 'USD', amount: 15000 },
   ]);
-  const [holdings, setHoldings] = useState([]);
+  const [holdings, setHoldings] = useState<any[]>([]);
   const [tagGroups, setTagGroups] = useState([
     { id: 'g1', name: '板块', values: ['科技', '金融', '医疗'] },
     { id: 'g2', name: '券商', values: ['Moomoo', '乐天'] },
