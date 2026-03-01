@@ -9,7 +9,7 @@ function getAuth() {
   const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
   const key = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n');
   if (!email || !key) throw new Error('未配置 Google Service Account 环境变量');
-  return new google.auth.JWT(email, undefined, key, SCOPES);
+  return new google.auth.JWT({ email, key, scopes: SCOPES });
 }
 
 async function getDrive() {
