@@ -1,4 +1,4 @@
-import { Settings, TagGroup } from '@/src/types';
+import { Settings, TagGroup } from '@/types';
 
 export const CURRENCIES = [
   'USD', 'HKD', 'JPY', 'CNY', 'EUR', 'GBP',
