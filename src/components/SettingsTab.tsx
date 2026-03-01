@@ -46,7 +46,7 @@ export default function SettingsTab({
   const syncStatusText = {
     idle: '未配置 Drive，使用本地存储',
     syncing: '同步中…',
-    success: `已同步至 Google Drive${syncState.lastSynced ? `（${new Date(syncState.lastSynced).toLocaleString()}）` : ''}`,
+    success: `已同步至 Upstash Redis${syncState.lastSynced ? `（${new Date(syncState.lastSynced).toLocaleString()}）` : ''}`,
     error: syncState.error ?? '同步出错',
   }[syncState.status];
 
@@ -132,13 +132,13 @@ export default function SettingsTab({
           </div>
           {syncState.status === 'error' && (
             <div className="text-xs text-gray-400 mt-1">
-              参考 <code className="bg-gray-100 px-1 rounded">GOOGLE_DRIVE_SETUP.md</code> 配置 Drive 同步
+              参考 SYNC_SETUP.md 配置 Upstash 同步
             </div>
           )}
         </div>
 
         <p className="text-sm text-gray-500 mb-4 leading-relaxed">
-          数据保存在浏览器本地 + Google Drive（如已配置）。
+          数据保存在浏览器本地 + Upstash Redis（如已配置）。
           也可手动导出 JSON 备份，在其他设备导入恢复。
         </p>
 
