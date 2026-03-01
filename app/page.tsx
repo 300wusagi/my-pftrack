@@ -158,7 +158,7 @@ useEffect(() => {
     });
   }, [holdings.length, settings.baseCurrency]);
 
-  const convert = (amount, fromCur) =>
+  const convert = (amount: number, fromCur: string) => 
     fromCur === settings.baseCurrency ? amount : amount / (rates[fromCur] || 1);
 
   const totalValue =
