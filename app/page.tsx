@@ -1,22 +1,10 @@
 'use client';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
-  PieChart,
-  Pie,
-  Cell,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  CartesianGrid,
-  Legend,
+  PieChart, Pie, Cell, LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend,
 } from 'recharts';
 
-const COLORS = [
-  '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4',
-];
+const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
 const CURRENCIES = ['USD', 'HKD', 'JPY', 'CNY', 'EUR'];
 
 const COL_OPTIONS = [
@@ -352,23 +340,37 @@ export default function PortfolioApp() {
     );
 
     const sym = tradeForm.symbol.toUpperCase();
-    const existing = holdings.find((h) => h.symbol === sym);
+    
+    // 检查标签是否完全相等的辅助函数
+    const isTagsEqual = (tags1: any, tags2: any) => {
+      const t1 = tags1 || {};
+      const t2 = tags2 || {};
+      const keys1 = Object.keys(t1).filter(k => t1[k]);
+      const keys2 = Object.keys(t2).filter(k => t2[k]);
+      if (keys1.length !== keys2.length) return false;
+      return keys1.every(k => t1[k] === t2[k]);
+    };
+
+    // 只合并 symbol 相同 且 标签完全相同 的持仓
+    const existing = holdings.find((h) => h.symbol === sym && isTagsEqual(h.tags, tradeForm.tags));
+
     if (existing) {
       const newQty = existing.quantity + qty;
       const newCost = (existing.quantity * existing.costPrice + cost) / newQty;
       setHoldings((hld) =>
         hld.map((h) =>
-          h.symbol === sym
+          h.id === existing.id
             ? {
                 ...h,
                 quantity: newQty,
                 costPrice: newCost,
-                tags: { ...h.tags, ...tradeForm.tags },
+                // 标签已经一致，无需再合并标签
               }
             : h
         )
       );
     } else {
+      // 就算同标的，只要标签不同，也会创建一条新记录
       setHoldings((hld) => [
         ...hld,
         {
@@ -459,38 +461,39 @@ export default function PortfolioApp() {
     const prevMonth = () => setCalendarMonth(new Date(year, month - 1, 1));
     const nextMonth = () => setCalendarMonth(new Date(year, month + 1, 1));
 
+    // 修改为明亮白色的风格
     return (
-      <div className="bg-[#0d1117] p-6 rounded-xl shadow-lg font-sans border border-gray-800">
-        <div className="flex justify-between items-center mb-6 text-gray-300">
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 font-sans">
+        <div className="flex justify-between items-center mb-6 text-gray-800">
           <h3 className="text-lg font-bold">
             {year}年 {month + 1}月 · 盈亏日历
           </h3>
           <div className="space-x-4">
             <button
               onClick={prevMonth}
-              className="hover:text-white transition-colors"
+              className="hover:text-blue-600 transition-colors font-bold text-sm text-gray-500"
             >
               ◀ 上月
             </button>
             <button
               onClick={nextMonth}
-              className="hover:text-white transition-colors"
+              className="hover:text-blue-600 transition-colors font-bold text-sm text-gray-500"
             >
               下月 ▶
             </button>
           </div>
         </div>
-        <div className="grid grid-cols-7 gap-px bg-gray-800 border border-gray-800 rounded-lg overflow-hidden">
+        <div className="grid grid-cols-7 gap-px bg-gray-200 border border-gray-200 rounded-lg overflow-hidden">
           {['日', '一', '二', '三', '四', '五', '六'].map((d) => (
             <div
               key={d}
-              className="bg-[#161b22] text-center py-2 text-xs font-bold text-gray-500"
+              className="bg-gray-50 text-center py-2 text-xs font-bold text-gray-500"
             >
               {d}
             </div>
           ))}
           {blanks.map((_, i) => (
-            <div key={`blank-${i}`} className="bg-[#0d1117] min-h-[100px]"></div>
+            <div key={`blank-${i}`} className="bg-white min-h-[100px]"></div>
           ))}
           {days.map((day) => {
             const dateStr = `${year}-${String(month + 1).padStart(
@@ -504,9 +507,9 @@ export default function PortfolioApp() {
             return (
               <div
                 key={day}
-                className={`bg-[#0d1117] min-h-[100px] p-2 flex flex-col justify-between transition-colors ${
-                  snap ? 'hover:bg-[#161b22]' : ''
-                } border-t border-r border-gray-800`}
+                className={`bg-white min-h-[100px] p-2 flex flex-col justify-between transition-colors ${
+                  snap ? 'hover:bg-gray-50' : ''
+                } border-t border-r border-gray-100`}
               >
                 <div className="text-gray-500 text-xs font-bold">{day}</div>
                 {snap && (
@@ -516,7 +519,7 @@ export default function PortfolioApp() {
                         isPositive
                           ? 'text-red-500'
                           : isNegative
-                          ? 'text-green-500'
+                          ? 'text-green-600'
                           : 'text-gray-400'
                       }`}
                     >
@@ -530,8 +533,8 @@ export default function PortfolioApp() {
                         isPositive
                           ? 'text-red-400'
                           : isNegative
-                          ? 'text-green-400'
-                          : 'text-gray-500'
+                          ? 'text-green-500'
+                          : 'text-gray-400'
                       }`}
                     >
                       {snap.diffPercent > 0 ? '+' : ''}
