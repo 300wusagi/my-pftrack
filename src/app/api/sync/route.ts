@@ -1,51 +1,37 @@
-import { google } from 'googleapis';
 import { NextResponse } from 'next/server';
-import { Readable } from 'stream';
 
-const SCOPES = ['https://www.googleapis.com/auth/drive'];
-const FILE_NAME = 'pftrack_data.json';
+const KV_KEY = 'pftrack_data';
 
-function getAuth() {
-  const email = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-  const key = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n');
-  if (!email || !key) throw new Error('未配置 Google Service Account 环境变量');
-  return new google.auth.JWT({ email, key, scopes: SCOPES });
+// 通过 Vercel KV REST API 读写数据
+// 无需安装额外包，直接用 fetch 调用
+function getKVHeaders() {
+  return {
+    Authorization: `Bearer ${process.env.KV_REST_API_TOKEN}`,
+    'Content-Type': 'application/json',
+  };
 }
 
-async function getDrive() {
-  const auth = getAuth();
-  return google.drive({ version: 'v3', auth });
-}
-
-async function findFile(drive: ReturnType<typeof google.drive>, driveId: string) {
-  const res = await drive.files.list({
-    q: `name='${FILE_NAME}' and '${driveId}' in parents and trashed=false`,
-    fields: 'files(id, name)',
-    // 共享云端硬盘必须加这三个参数
-    supportsAllDrives: true,
-    includeItemsFromAllDrives: true,
-    corpora: 'drive',
-    driveId,
-  });
-  return res.data.files?.[0] ?? null;
-}
+const baseUrl = () => process.env.KV_REST_API_URL;
 
 export async function GET() {
   try {
-    const drive = await getDrive();
-    const driveId = process.env.GOOGLE_DRIVE_FOLDER_ID!;
-    const file = await findFile(drive, driveId);
+    if (!process.env.KV_REST_API_URL || !process.env.KV_REST_API_TOKEN) {
+      return NextResponse.json({ exists: false, data: null, error: 'KV未配置' });
+    }
 
-    if (!file?.id) {
+    const res = await fetch(`${baseUrl()}/get/${KV_KEY}`, {
+      headers: getKVHeaders(),
+    });
+
+    const json = await res.json();
+
+    if (!json.result) {
       return NextResponse.json({ exists: false, data: null });
     }
 
-    const res = await drive.files.get(
-      { fileId: file.id, alt: 'media', supportsAllDrives: true },
-      { responseType: 'text' }
-    );
-    const data = JSON.parse(res.data as string);
-    return NextResponse.json({ exists: true, data, fileId: file.id });
+    // KV 存的是 JSON 字符串
+    const data = typeof json.result === 'string' ? JSON.parse(json.result) : json.result;
+    return NextResponse.json({ exists: true, data });
   } catch (err: any) {
     console.error('[sync GET]', err.message);
     return NextResponse.json({ error: err.message }, { status: 500 });
@@ -54,33 +40,25 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    if (!process.env.KV_REST_API_URL || !process.env.KV_REST_API_TOKEN) {
+      return NextResponse.json({ error: 'KV未配置' }, { status: 503 });
+    }
+
     const body = await request.json();
-    const drive = await getDrive();
-    const driveId = process.env.GOOGLE_DRIVE_FOLDER_ID!;
     const content = JSON.stringify({ ...body, _syncedAt: new Date().toISOString() });
 
-    const existingFile = await findFile(drive, driveId);
-    const mediaBody = Readable.from([content]);
-    const media = { mimeType: 'application/json', body: mediaBody };
+    const res = await fetch(`${baseUrl()}/set/${KV_KEY}`, {
+      method: 'POST',
+      headers: getKVHeaders(),
+      body: JSON.stringify(content),
+    });
 
-    if (existingFile?.id) {
-      await drive.files.update({
-        fileId: existingFile.id,
-        media,
-        supportsAllDrives: true, // 共享云端硬盘必须加
-      });
-      return NextResponse.json({ ok: true, fileId: existingFile.id });
+    const json = await res.json();
+
+    if (json.result === 'OK') {
+      return NextResponse.json({ ok: true });
     } else {
-      const created = await drive.files.create({
-        requestBody: {
-          name: FILE_NAME,
-          parents: [driveId],
-        },
-        media,
-        fields: 'id',
-        supportsAllDrives: true, // 共享云端硬盘必须加
-      });
-      return NextResponse.json({ ok: true, fileId: created.data.id });
+      throw new Error(JSON.stringify(json));
     }
   } catch (err: any) {
     console.error('[sync POST]', err.message);
