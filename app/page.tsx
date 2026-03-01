@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   PieChart,
   Pie,
@@ -56,27 +56,29 @@ export default function PortfolioApp() {
       'action',
     ],
   });
-  const [cash, setCash] = useState([
+  const [cash, setCash] = useState<any[]>([
     { id: 'c1', currency: 'USD', amount: 15000 },
   ]);
   const [holdings, setHoldings] = useState<any[]>([]);
-  const [tagGroups, setTagGroups] = useState([
+  const [tagGroups, setTagGroups] = useState<any[]>([
     { id: 'g1', name: '板块', values: ['科技', '金融', '医疗'] },
     { id: 'g2', name: '券商', values: ['Moomoo', '乐天'] },
   ]);
-  const [snapshots, setSnapshots] = useState([]);
+  const [snapshots, setSnapshots] = useState<any[]>([]);
 
-  const [liveData, setLiveData] = useState({});
+  // 修复：声明为字典类型
+  const [liveData, setLiveData] = useState<Record<string, any>>({});
   const [rates, setRates] = useState<Record<string, number>>({ USD: 1 });
 
-  // 修改：允许多个维度同时选中，用于渲染多个饼图
-  const [allocDims, setAllocDims] = useState(['holding']);
+  // 允许多个维度同时选中
+  const [allocDims, setAllocDims] = useState<string[]>(['holding']);
   const [showColToggle, setShowColToggle] = useState(false);
 
-  const [modalType, setModalType] = useState(null);
-  const [sellTarget, setSellTarget] = useState(null);
+  // 修复：声明可能为 null 的类型
+  const [modalType, setModalType] = useState<string | null>(null);
+  const [sellTarget, setSellTarget] = useState<any>(null);
   const [tradeStep, setTradeStep] = useState(1);
-  const [tradeForm, setTradeForm] = useState({
+  const [tradeForm, setTradeForm] = useState<any>({
     id: null,
     trackType: 'auto',
     symbol: '',
@@ -91,32 +93,34 @@ export default function PortfolioApp() {
     amount: '',
   });
 
-useEffect(() => {
-  // 为参数 k 指定 string 类型，为 def 指定 any 类型
-  const load = (k: string, def: any) => {
-    const s = localStorage.getItem(k);
-    return s ? JSON.parse(s) : def;
-  };
+  useEffect(() => {
+    const load = (k: string, def: any) => {
+      const s = localStorage.getItem(k);
+      return s ? JSON.parse(s) : def;
+    };
     const savedSet = load('pf_set', null);
-    setSettings({
-      baseCurrency: savedSet?.baseCurrency || 'USD',
-      visibleCols: savedSet?.visibleCols || [
-        'symbol',
-        'quantity',
-        'price',
-        'cost',
-        'value',
-        'pnl',
-        'weight',
-        'tags',
-        'action',
-      ],
-    });
+    if (savedSet) {
+      setSettings({
+        baseCurrency: savedSet.baseCurrency || 'USD',
+        visibleCols: savedSet.visibleCols || [
+          'symbol',
+          'quantity',
+          'price',
+          'cost',
+          'value',
+          'pnl',
+          'weight',
+          'tags',
+          'action',
+        ],
+      });
+    }
     setCash(load('pf_csh', cash));
     setHoldings(load('pf_hld', holdings));
     setTagGroups(load('pf_tag', tagGroups));
     setSnapshots(load('pf_snp', []));
     setLoading(false);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -135,7 +139,7 @@ useEffect(() => {
         if (data.rates) setRates(data.rates);
       });
 
-    holdings.forEach(async (h) => {
+    holdings.forEach(async (h: any) => {
       if (h.trackType === 'custom') return;
       try {
         const res = await fetch(`/api/quote?symbol=${h.symbol}`);
@@ -156,6 +160,7 @@ useEffect(() => {
         setLiveData((prev) => ({ ...prev, [h.symbol]: { error: true } }));
       }
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [holdings.length, settings.baseCurrency]);
 
   const convert = (amount: number, fromCur: string) => 
@@ -185,8 +190,8 @@ useEffect(() => {
     });
   }, [totalValue, loading]);
 
-  // 修改标的属性提交
-  const handleEditSubmit = (e) => {
+  // 修复：添加 React.FormEvent 类型
+  const handleEditSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const qty = parseFloat(tradeForm.quantity);
     const price = parseFloat(tradeForm.price);
@@ -217,8 +222,7 @@ useEffect(() => {
     setModalType(null);
   };
 
-  // 现金存取 / 设置总额提交
-  const handleCashSubmit = (e) => {
+  const handleCashSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const amt = parseFloat(tradeForm.amount) || 0;
     const op = tradeForm.cashOp;
@@ -254,7 +258,7 @@ useEffect(() => {
     setModalType(null);
   };
 
-  const handleSellSubmit = (e) => {
+  const handleSellSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const qty = parseFloat(tradeForm.quantity);
     const price = parseFloat(tradeForm.price);
@@ -287,7 +291,7 @@ useEffect(() => {
     setModalType(null);
   };
 
-  const handleBuySubmit = (e) => {
+  const handleBuySubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (tradeStep === 1 && tagGroups.length > 0) return setTradeStep(2);
 
@@ -295,15 +299,15 @@ useEffect(() => {
     const cost = qty * parseFloat(tradeForm.price);
 
     let hasCashAcc = cash.find((c) => c.currency === tradeForm.currency);
-    setCash((cash) =>
+    setCash((prevCash) =>
       hasCashAcc
-        ? cash.map((c) =>
+        ? prevCash.map((c) =>
             c.currency === tradeForm.currency
               ? { ...c, amount: c.amount - cost }
               : c
           )
         : [
-            ...cash,
+            ...prevCash,
             {
               id: Date.now().toString(),
               currency: tradeForm.currency,
@@ -350,11 +354,11 @@ useEffect(() => {
     setModalType(null);
   };
 
-  // 获取特定维度下饼图的数据函数
-  const getAllocData = (dim) => {
-    let sums = {};
+  // 修复：为参数 dim 指定类型，为 sums 指定类型
+  const getAllocData = (dim: string) => {
+    let sums: Record<string, number> = {};
     if (dim === 'holding') {
-      holdings.forEach((h) => {
+      holdings.forEach((h: any) => {
         const live = liveData[h.symbol];
         if (h.trackType === 'auto' && (!live || live.error)) return;
         sums[h.symbol] =
@@ -364,12 +368,12 @@ useEffect(() => {
             h.trackType === 'auto' ? live.currency : h.customCurrency
           );
       });
-      cash.forEach((c) => {
+      cash.forEach((c: any) => {
         sums[`💵 ${c.currency}`] =
           (sums[`💵 ${c.currency}`] || 0) + convert(c.amount, c.currency);
       });
     } else if (dim === 'currency') {
-      holdings.forEach((h) => {
+      holdings.forEach((h: any) => {
         const live = liveData[h.symbol];
         if (h.trackType === 'auto' && (!live || live.error)) return;
         const cur = h.trackType === 'auto' ? live.currency : h.customCurrency;
@@ -380,13 +384,13 @@ useEffect(() => {
             cur
           );
       });
-      cash.forEach((c) => {
+      cash.forEach((c: any) => {
         sums[c.currency] =
           (sums[c.currency] || 0) + convert(c.amount, c.currency);
       });
     } else if (dim.startsWith('tag-')) {
       const tagName = dim.replace('tag-', '');
-      holdings.forEach((h) => {
+      holdings.forEach((h: any) => {
         const live = liveData[h.symbol];
         if (h.trackType === 'auto' && (!live || live.error)) return;
         const tagVal = h.tags?.[tagName] || '未分类';
@@ -398,7 +402,7 @@ useEffect(() => {
           );
       });
       const totalCash = cash.reduce(
-        (sum, c) => sum + convert(c.amount, c.currency),
+        (sum: number, c: any) => sum + convert(c.amount, c.currency),
         0
       );
       if (totalCash > 0) sums['💵 现金'] = totalCash;
@@ -528,7 +532,7 @@ useEffect(() => {
             </div>
 
             <div className="bg-white rounded-xl shadow-sm border p-4 flex gap-4 overflow-x-auto">
-              {cash.map((c) => (
+              {cash.map((c: any) => (
                 <div
                   key={c.id}
                   className="min-w-[120px] p-3 bg-gray-50 border rounded-lg"
@@ -575,7 +579,7 @@ useEffect(() => {
                     </tr>
                   </thead>
                   <tbody className="divide-y text-sm">
-                    {holdings.map((h) => {
+                    {holdings.map((h: any) => {
                       const isAuto = h.trackType === 'auto';
                       const live = liveData[h.symbol];
                       const isError = isAuto && live?.error;
@@ -675,7 +679,7 @@ useEffect(() => {
                           {settings.visibleCols.includes('pnl') && (
                             <td
                               className={`p-4 text-right font-bold ${
-                                pnlBase >= 0 ? 'text-red-500' : 'text-green-600'
+                                pnlBase && pnlBase >= 0 ? 'text-red-500' : 'text-green-600'
                               }`}
                             >
                               {pnlBase != null
@@ -696,7 +700,7 @@ useEffect(() => {
                               <div className="flex flex-wrap gap-1 max-w-[150px]">
                                 {Object.values(h.tags || {})
                                   .filter(Boolean)
-                                  .map((t, i) => (
+                                  .map((t: any, i) => (
                                     <span
                                       key={i}
                                       className="text-[10px] bg-gray-100 border px-2 py-0.5 rounded-full"
@@ -769,7 +773,7 @@ useEffect(() => {
               {[
                 { id: 'holding', label: '持仓标的' },
                 { id: 'currency', label: '结算币种' },
-                ...tagGroups.map((g) => ({
+                ...tagGroups.map((g: any) => ({
                   id: `tag-${g.name}`,
                   label: g.name,
                 })),
@@ -836,7 +840,7 @@ useEffect(() => {
                             ))}
                           </Pie>
                           <Tooltip
-                            formatter={(value) =>
+                            formatter={(value: any) =>
                               `${value.toLocaleString(undefined, {
                                 maximumFractionDigits: 2,
                               })} ${settings.baseCurrency}`
@@ -887,7 +891,7 @@ useEffect(() => {
                         width={80}
                       />
                       <Tooltip
-                        formatter={(value) =>
+                        formatter={(value: any) =>
                           value.toLocaleString(undefined, {
                             maximumFractionDigits: 2,
                           })
@@ -923,8 +927,9 @@ useEffect(() => {
                 />
                 <button
                   onClick={() => {
-                    const input = document.getElementById('newGroupName');
-                    if (input.value) {
+                    // 修复：声明为 HTMLInputElement
+                    const input = document.getElementById('newGroupName') as HTMLInputElement;
+                    if (input && input.value) {
                       setTagGroups([
                         ...tagGroups,
                         {
@@ -942,7 +947,7 @@ useEffect(() => {
                 </button>
               </div>
               <div className="space-y-4">
-                {tagGroups.map((group) => (
+                {tagGroups.map((group: any) => (
                   <div
                     key={group.id}
                     className="p-4 border rounded-lg bg-gray-50 relative"
@@ -959,7 +964,7 @@ useEffect(() => {
                       {group.name}
                     </div>
                     <div className="flex flex-wrap gap-2 mb-3">
-                      {group.values.map((v) => (
+                      {group.values.map((v: string) => (
                         <span
                           key={v}
                           className="bg-white border text-xs px-2 py-1 rounded-full flex items-center gap-1"
@@ -974,7 +979,7 @@ useEffect(() => {
                                     ? {
                                         ...g,
                                         values: g.values.filter(
-                                          (val) => val !== v
+                                          (val: string) => val !== v
                                         ),
                                       }
                                     : g
@@ -992,18 +997,19 @@ useEffect(() => {
                       placeholder="添加新值并按回车..."
                       className="border rounded px-2 py-1 text-xs outline-none w-full"
                       onKeyDown={(e) => {
-                        if (e.key === 'Enter' && e.target.value) {
+                        const target = e.target as HTMLInputElement;
+                        if (e.key === 'Enter' && target.value) {
                           setTagGroups(
                             tagGroups.map((g) =>
                               g.id === group.id
                                 ? {
                                     ...g,
-                                    values: [...g.values, e.target.value],
+                                    values: [...g.values, target.value],
                                   }
                                 : g
                             )
                           );
-                          e.target.value = '';
+                          target.value = '';
                         }
                       }}
                     />
@@ -1249,7 +1255,7 @@ useEffect(() => {
                   重新分配标签
                 </p>
                 <div className="grid grid-cols-2 gap-4">
-                  {tagGroups.map((group) => (
+                  {tagGroups.map((group: any) => (
                     <div key={group.id}>
                       <label className="block text-xs text-gray-500 mb-1">
                         {group.name}
@@ -1268,7 +1274,7 @@ useEffect(() => {
                         }
                       >
                         <option value="">未分类</option>
-                        {group.values.map((v) => (
+                        {group.values.map((v: string) => (
                           <option key={v} value={v}>
                             {v}
                           </option>
@@ -1298,7 +1304,7 @@ useEffect(() => {
         </div>
       )}
 
-      {/* ================= 买卖弹窗逻辑同前，为节省篇幅只展示买入 ================= */}
+      {/* ================= 卖出弹窗 ================= */}
       {modalType === 'sell' && sellTarget && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden animate-fade-in">
@@ -1387,6 +1393,7 @@ useEffect(() => {
         </div>
       )}
 
+      {/* ================= 买入弹窗 ================= */}
       {modalType === 'buy' && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-fade-in">
@@ -1605,7 +1612,7 @@ useEffect(() => {
                     </span>{' '}
                     贴上标签，方便在饼图里统计。
                   </p>
-                  {tagGroups.map((group) => (
+                  {tagGroups.map((group: any) => (
                     <div key={group.id}>
                       <label className="block text-sm font-semibold mb-1">
                         {group.name}
@@ -1624,7 +1631,7 @@ useEffect(() => {
                         }
                       >
                         <option value="">未分类</option>
-                        {group.values.map((v) => (
+                        {group.values.map((v: string) => (
                           <option key={v} value={v}>
                             {v}
                           </option>
