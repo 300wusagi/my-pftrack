@@ -22,7 +22,7 @@ function getAuth() {
   key: key,
   scopes: SCOPES,
 });
-
+}
 async function getDrive() {
   const auth = getAuth();
   return google.drive({ version: 'v3', auth });
