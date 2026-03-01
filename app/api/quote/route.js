@@ -9,10 +9,9 @@ export async function GET(request) {
     return NextResponse.json({ error: '请提供代码' }, { status: 400 });
 
   try {
-    // 强制关闭一些非必要的雅虎通知，提升速度
-    yahooFinance.suppressNotices(['yahooSurvey']);
+    // 移除了 suppressNotices，避免 Next.js 生产环境打包时找不到该函数的 TypeError
 
-    // 在真实的云服务器（Vercel）上，直接调用底层数据，绝不会被拦截！
+    // 在真实的云服务器（Vercel）上，直接调用底层数据
     const quote = await yahooFinance.quote(symbol);
 
     return NextResponse.json({
