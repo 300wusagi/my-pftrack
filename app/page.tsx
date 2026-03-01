@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   PieChart,
   Pie,
@@ -15,8 +15,7 @@ import {
 } from 'recharts';
 
 const COLORS = [
-  '#3b82f6', '#10b981', '#f59e0b', '#ef4444',
-  '#8b5cf6', '#ec4899', '#06b6d4',
+  '#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4',
 ];
 const CURRENCIES = ['USD', 'HKD', 'JPY', 'CNY', 'EUR'];
 
@@ -38,13 +37,10 @@ export default function PortfolioApp() {
 
   const [settings, setSettings] = useState({
     baseCurrency: 'USD',
-    visibleCols: [
-      'symbol', 'quantity', 'price', 'cost',
-      'value', 'pnl', 'weight', 'tags', 'action',
-    ],
+    visibleCols: COL_OPTIONS.map((c) => c.id),
   });
   const [cash, setCash] = useState<any[]>([
-    { id: 'c1', currency: 'USD', amount: 15000 },
+    { id: 'c1', currency: 'USD', amount: 0 },
   ]);
   const [holdings, setHoldings] = useState<any[]>([]);
   const [tagGroups, setTagGroups] = useState<any[]>([
@@ -58,9 +54,9 @@ export default function PortfolioApp() {
 
   const [allocDims, setAllocDims] = useState<string[]>(['holding']);
   const [showColToggle, setShowColToggle] = useState(false);
-  
-  // 新增：用于持仓列表的分组状态
   const [groupBy, setGroupBy] = useState<string | null>(null);
+
+  const [calendarMonth, setCalendarMonth] = useState(new Date());
 
   const [modalType, setModalType] = useState<string | null>(null);
   const [sellTarget, setSellTarget] = useState<any>(null);
@@ -80,6 +76,8 @@ export default function PortfolioApp() {
     amount: '',
   });
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     const load = (k: string, def: any) => {
       const s = localStorage.getItem(k);
@@ -89,7 +87,7 @@ export default function PortfolioApp() {
     if (savedSet) {
       setSettings({
         baseCurrency: savedSet.baseCurrency || 'USD',
-        visibleCols: savedSet.visibleCols || COL_OPTIONS.map(c => c.id),
+        visibleCols: savedSet.visibleCols || COL_OPTIONS.map((c) => c.id),
       });
     }
     setCash(load('pf_csh', cash));
@@ -97,7 +95,7 @@ export default function PortfolioApp() {
     setTagGroups(load('pf_tag', tagGroups));
     setSnapshots(load('pf_snp', []));
     setLoading(false);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -110,6 +108,7 @@ export default function PortfolioApp() {
   }, [settings, cash, holdings, tagGroups, snapshots, loading]);
 
   useEffect(() => {
+    if (loading) return;
     fetch(`https://open.er-api.com/v6/latest/${settings.baseCurrency}`)
       .then((res) => res.json())
       .then((data) => {
@@ -137,10 +136,10 @@ export default function PortfolioApp() {
         setLiveData((prev) => ({ ...prev, [h.symbol]: { error: true } }));
       }
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [holdings.length, settings.baseCurrency]);
 
-  const convert = (amount: number, fromCur: string) => 
+  const convert = (amount: number, fromCur: string) =>
     fromCur === settings.baseCurrency ? amount : amount / (rates[fromCur] || 1);
 
   const totalValue =
@@ -167,28 +166,65 @@ export default function PortfolioApp() {
     });
   }, [totalValue, loading]);
 
-  // 新增：计算带有每日盈亏变化的快照历史
   const enrichedSnapshots = useMemo(() => {
-    return snapshots.map((s, i) => {
+    const sorted = [...snapshots].sort(
+      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+    );
+    return sorted.map((s, i) => {
       if (i === 0) return { ...s, diffAmount: 0, diffPercent: 0 };
-      const prevVal = snapshots[i - 1].value;
+      const prevVal = sorted[i - 1].value;
       const diffAmount = s.value - prevVal;
       const diffPercent = prevVal > 0 ? (diffAmount / prevVal) * 100 : 0;
       return { ...s, diffAmount, diffPercent };
-    }).reverse(); // 倒序，最新的日期在最上面
+    });
   }, [snapshots]);
 
-  // 分组逻辑
+  const snapshotMap = useMemo(() => {
+    return Object.fromEntries(enrichedSnapshots.map((s) => [s.date, s]));
+  }, [enrichedSnapshots]);
+
   const groupedHoldings = useMemo(() => {
-    if (!groupBy) return { '所有资产': holdings };
+    if (!groupBy) return { 所有资产: holdings };
     const groups: Record<string, any[]> = {};
-    holdings.forEach(h => {
+    holdings.forEach((h) => {
       const tagVal = h.tags?.[groupBy] || '未分类';
       if (!groups[tagVal]) groups[tagVal] = [];
       groups[tagVal].push(h);
     });
     return groups;
   }, [holdings, groupBy]);
+
+  const handleExport = () => {
+    const data = { settings, cash, holdings, tagGroups, snapshots };
+    const blob = new Blob([JSON.stringify(data)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `PFTRACK_Backup_${new Date().toISOString().split('T')[0]}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const data = JSON.parse(event.target?.result as string);
+        if (data.settings) setSettings(data.settings);
+        if (data.cash) setCash(data.cash);
+        if (data.holdings) setHoldings(data.holdings);
+        if (data.tagGroups) setTagGroups(data.tagGroups);
+        if (data.snapshots) setSnapshots(data.snapshots);
+        alert('🎉 数据导入成功！');
+      } catch (err) {
+        alert('文件格式错误或已损坏！');
+      }
+    };
+    reader.readAsText(file);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
 
   const handleEditSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -411,18 +447,134 @@ export default function PortfolioApp() {
       .sort((a, b) => b.value - a.value);
   };
 
-  // 提取公用组件：代码输入提示小贴士
+  const renderCalendar = () => {
+    const year = calendarMonth.getFullYear();
+    const month = calendarMonth.getMonth();
+    const firstDayIndex = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    const blanks = Array(firstDayIndex).fill(null);
+    const days = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+
+    const prevMonth = () => setCalendarMonth(new Date(year, month - 1, 1));
+    const nextMonth = () => setCalendarMonth(new Date(year, month + 1, 1));
+
+    return (
+      <div className="bg-[#0d1117] p-6 rounded-xl shadow-lg font-sans border border-gray-800">
+        <div className="flex justify-between items-center mb-6 text-gray-300">
+          <h3 className="text-lg font-bold">
+            {year}年 {month + 1}月 · 盈亏日历
+          </h3>
+          <div className="space-x-4">
+            <button
+              onClick={prevMonth}
+              className="hover:text-white transition-colors"
+            >
+              ◀ 上月
+            </button>
+            <button
+              onClick={nextMonth}
+              className="hover:text-white transition-colors"
+            >
+              下月 ▶
+            </button>
+          </div>
+        </div>
+        <div className="grid grid-cols-7 gap-px bg-gray-800 border border-gray-800 rounded-lg overflow-hidden">
+          {['日', '一', '二', '三', '四', '五', '六'].map((d) => (
+            <div
+              key={d}
+              className="bg-[#161b22] text-center py-2 text-xs font-bold text-gray-500"
+            >
+              {d}
+            </div>
+          ))}
+          {blanks.map((_, i) => (
+            <div key={`blank-${i}`} className="bg-[#0d1117] min-h-[100px]"></div>
+          ))}
+          {days.map((day) => {
+            const dateStr = `${year}-${String(month + 1).padStart(
+              2,
+              '0'
+            )}-${String(day).padStart(2, '0')}`;
+            const snap = snapshotMap[dateStr];
+            const isPositive = snap && snap.diffPercent > 0;
+            const isNegative = snap && snap.diffPercent < 0;
+
+            return (
+              <div
+                key={day}
+                className={`bg-[#0d1117] min-h-[100px] p-2 flex flex-col justify-between transition-colors ${
+                  snap ? 'hover:bg-[#161b22]' : ''
+                } border-t border-r border-gray-800`}
+              >
+                <div className="text-gray-500 text-xs font-bold">{day}</div>
+                {snap && (
+                  <div className="text-center pb-2">
+                    <div
+                      className={`text-xs font-bold ${
+                        isPositive
+                          ? 'text-red-500'
+                          : isNegative
+                          ? 'text-green-500'
+                          : 'text-gray-400'
+                      }`}
+                    >
+                      {isPositive ? '▲' : isNegative ? '▼' : ''}{' '}
+                      {Math.abs(snap.diffAmount).toLocaleString(undefined, {
+                        maximumFractionDigits: 0,
+                      })}
+                    </div>
+                    <div
+                      className={`text-[10px] mt-0.5 ${
+                        isPositive
+                          ? 'text-red-400'
+                          : isNegative
+                          ? 'text-green-400'
+                          : 'text-gray-500'
+                      }`}
+                    >
+                      {snap.diffPercent > 0 ? '+' : ''}
+                      {snap.diffPercent.toFixed(2)}%
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <div className="text-xs text-gray-500 mt-4 text-right">
+          * 数据单位为设置的基础币种 ({settings.baseCurrency})，红色代表当日资产增加，绿色代表减少。
+        </div>
+      </div>
+    );
+  };
+
   const TickerTooltip = () => (
     <div className="relative group cursor-pointer inline-flex ml-1">
-      <span className="text-[10px] bg-blue-100 text-blue-600 rounded-full w-4 h-4 flex items-center justify-center font-bold">?</span>
+      <span className="text-[10px] bg-blue-100 text-blue-600 rounded-full w-4 h-4 flex items-center justify-center font-bold">
+        ?
+      </span>
       <div className="absolute left-0 bottom-full mb-2 hidden group-hover:block w-56 bg-gray-800 text-white text-xs p-3 rounded-lg shadow-xl z-50">
         <p className="font-bold mb-1 text-blue-300">雅虎财经代码规则:</p>
         <ul className="space-y-1">
-          <li>🇺🇸 <span className="text-gray-300">美股:</span> 直接输入 (如 NVDA)</li>
-          <li>🇭🇰 <span className="text-gray-300">港股:</span> 代码.HK (如 0700.HK)</li>
-          <li>🇯🇵 <span className="text-gray-300">日股:</span> 代码.T (如 9984.T)</li>
-          <li>🇨🇳 <span className="text-gray-300">A股(沪):</span> 代码.SS (如 600519.SS)</li>
-          <li>🇨🇳 <span className="text-gray-300">A股(深):</span> 代码.SZ (如 002594.SZ)</li>
+          <li>
+            🇺🇸 <span className="text-gray-300">美股:</span> 直接输入 (如 NVDA)
+          </li>
+          <li>
+            🇭🇰 <span className="text-gray-300">港股:</span> 代码.HK (如 0700.HK)
+          </li>
+          <li>
+            🇯🇵 <span className="text-gray-300">日股:</span> 代码.T (如 9984.T)
+          </li>
+          <li>
+            🇨🇳 <span className="text-gray-300">A股(沪):</span> 代码.SS (如
+            600519.SS)
+          </li>
+          <li>
+            🇨🇳 <span className="text-gray-300">A股(深):</span> 代码.SZ (如
+            002594.SZ)
+          </li>
         </ul>
       </div>
     </div>
@@ -452,12 +604,13 @@ export default function PortfolioApp() {
           </div>
         </div>
       </div>
+
       <div className="bg-white px-6 flex space-x-6 border-b overflow-x-auto">
         {[
           { id: 'holdings', label: '持仓一览' },
           { id: 'allocation', label: '资产分布' },
           { id: 'timeline', label: '历史走势' },
-          { id: 'settings', label: '设置与标签' },
+          { id: 'settings', label: '设置与数据' },
         ].map((t) => (
           <button
             key={t.id}
@@ -485,8 +638,10 @@ export default function PortfolioApp() {
                   onChange={(e) => setGroupBy(e.target.value || null)}
                 >
                   <option value="">📁 不分组</option>
-                  {tagGroups.map(g => (
-                    <option key={g.name} value={g.name}>按 {g.name} 分组</option>
+                  {tagGroups.map((g) => (
+                    <option key={g.name} value={g.name}>
+                      按 {g.name} 分组
+                    </option>
                   ))}
                 </select>
 
@@ -586,7 +741,14 @@ export default function PortfolioApp() {
                             <th
                               key={col.id}
                               className={`p-4 font-semibold ${
-                                ['quantity','price','cost','value','pnl','weight'].includes(col.id)
+                                [
+                                  'quantity',
+                                  'price',
+                                  'cost',
+                                  'value',
+                                  'pnl',
+                                  'weight',
+                                ].includes(col.id)
                                   ? 'text-right'
                                   : ''
                               }`}
@@ -598,137 +760,229 @@ export default function PortfolioApp() {
                     </tr>
                   </thead>
                   <tbody className="divide-y text-sm">
-                    {Object.entries(groupedHoldings).map(([groupName, groupList]) => (
-                      <React.Fragment key={groupName}>
-                        {groupBy && (
-                          <tr className="bg-gray-50/80">
-                            <td colSpan={settings.visibleCols.length} className="px-4 py-2 font-bold text-blue-600 text-xs border-y">
-                              ▾ {groupName} <span className="text-gray-400 font-normal">({groupList.length})</span>
-                            </td>
-                          </tr>
-                        )}
-                        {groupList.map((h: any) => {
-                          const isAuto = h.trackType === 'auto';
-                          const live = liveData[h.symbol];
-                          const isError = isAuto && live?.error;
-                          const isFetching = isAuto && !live;
-
-                          const currentPrice = isAuto ? (live && !isError ? live.price : null) : h.customPrice;
-                          const curCurrency = isAuto ? (live && !isError ? live.currency : h.currency) : h.customCurrency;
-
-                          const currentValBase = currentPrice ? convert(currentPrice * h.quantity, curCurrency) : null;
-                          const costValBase = convert(h.costPrice * h.quantity, h.currency);
-                          const pnlBase = currentValBase ? currentValBase - costValBase : null;
-                          const weight = totalValue > 0 && currentValBase ? (currentValBase / totalValue) * 100 : 0;
-
-                          return (
-                            <tr key={h.id} className="hover:bg-gray-50 transition-colors">
-                              {settings.visibleCols.includes('symbol') && (
-                                <td className="p-4">
-                                  <div className="font-bold text-base text-gray-800">
-                                    {isAuto && !isError && !isFetching ? live.name : h.name || h.symbol}
-                                    {!isAuto && (
-                                      <span className="text-[10px] bg-yellow-100 text-yellow-700 px-1.5 rounded ml-2 align-middle">
-                                        自定义
-                                      </span>
-                                    )}
-                                  </div>
-                                  <div className="text-xs text-gray-500 mt-0.5">{h.symbol}</div>
-                                </td>
-                              )}
-                              {settings.visibleCols.includes('quantity') && (
-                                <td className="p-4 text-right font-medium">{h.quantity}</td>
-                              )}
-                              {settings.visibleCols.includes('price') && (
-                                <td className="p-4 text-right">
-                                  {isError ? (
-                                    <span className="text-xs text-red-500 bg-red-50 px-2 py-1 rounded">获取失败</span>
-                                  ) : isFetching ? (
-                                    <span className="text-xs text-blue-500 animate-pulse">抓取中...</span>
-                                  ) : (
-                                    <>
-                                      <div className="font-bold">
-                                        {currentPrice?.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                                      </div>
-                                      <div className="text-xs text-gray-400">{curCurrency}</div>
-                                    </>
-                                  )}
-                                </td>
-                              )}
-                              {settings.visibleCols.includes('cost') && (
-                                <td className="p-4 text-right text-gray-600">
-                                  {h.costPrice.toFixed(2)}{' '}
-                                  <span className="text-[10px] text-gray-400">{h.currency}</span>
-                                </td>
-                              )}
-                              {settings.visibleCols.includes('value') && (
-                                <td className="p-4 text-right font-bold text-gray-700">
-                                  {currentValBase ? (
-                                    <>
-                                      {currentValBase.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                                      <span className="text-[10px] text-gray-400 ml-1 block">{settings.baseCurrency}</span>
-                                    </>
-                                  ) : '-'}
-                                </td>
-                              )}
-                              {settings.visibleCols.includes('pnl') && (
-                                <td className={`p-4 text-right font-bold ${pnlBase && pnlBase >= 0 ? 'text-red-500' : 'text-green-600'}`}>
-                                  {pnlBase != null ? (
-                                    <>
-                                      {(pnlBase >= 0 ? '+' : '') + pnlBase.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                                      <span className="text-[10px] ml-1 opacity-70 block">{settings.baseCurrency}</span>
-                                    </>
-                                  ) : '-'}
-                                </td>
-                              )}
-                              {settings.visibleCols.includes('weight') && (
-                                <td className="p-4 text-right font-bold text-gray-600">{weight.toFixed(2)}%</td>
-                              )}
-                              {settings.visibleCols.includes('tags') && (
-                                <td className="p-4">
-                                  <div className="flex flex-wrap gap-1 max-w-[150px]">
-                                    {Object.values(h.tags || {}).filter(Boolean).map((t: any, i) => (
-                                      <span key={i} className="text-[10px] bg-gray-100 border text-gray-600 px-2 py-0.5 rounded-full">
-                                        {t}
-                                      </span>
-                                    ))}
-                                  </div>
-                                </td>
-                              )}
-                              {settings.visibleCols.includes('action') && (
-                                <td className="p-4 text-right">
-                                  <div className="flex justify-end gap-2">
-                                    <button
-                                      onClick={() => {
-                                        setTradeForm({
-                                          id: h.id, trackType: h.trackType, symbol: h.symbol, name: h.name || h.symbol,
-                                          quantity: h.quantity, price: h.costPrice, currency: h.currency,
-                                          customPrice: h.customPrice || '', customCurrency: h.customCurrency || h.currency, tags: h.tags || {},
-                                        });
-                                        setModalType('edit');
-                                      }}
-                                      className="text-xs bg-white border text-blue-600 hover:bg-blue-50 px-3 py-1.5 rounded font-bold transition-colors"
-                                    >编辑</button>
-                                    <button
-                                      onClick={() => {
-                                        setSellTarget(h);
-                                        setTradeForm({ ...tradeForm, quantity: h.quantity, price: currentPrice || h.costPrice, currency: curCurrency });
-                                        setModalType('sell');
-                                      }}
-                                      className="text-xs bg-white border border-red-200 text-red-500 hover:bg-red-50 px-3 py-1.5 rounded font-bold transition-colors"
-                                    >卖出</button>
-                                  </div>
-                                </td>
-                              )}
+                    {Object.entries(groupedHoldings).map(
+                      ([groupName, groupList]) => (
+                        <React.Fragment key={groupName}>
+                          {groupBy && (
+                            <tr className="bg-gray-50/80">
+                              <td
+                                colSpan={settings.visibleCols.length}
+                                className="px-4 py-2 font-bold text-blue-600 text-xs border-y"
+                              >
+                                ▾ {groupName}{' '}
+                                <span className="text-gray-400 font-normal">
+                                  ({groupList.length})
+                                </span>
+                              </td>
                             </tr>
-                          );
-                        })}
-                      </React.Fragment>
-                    ))}
+                          )}
+                          {groupList.map((h: any) => {
+                            const isAuto = h.trackType === 'auto';
+                            const live = liveData[h.symbol];
+                            const isError = isAuto && live?.error;
+                            const isFetching = isAuto && !live;
+
+                            const currentPrice = isAuto
+                              ? live && !isError
+                                ? live.price
+                                : null
+                              : h.customPrice;
+                            const curCurrency = isAuto
+                              ? live && !isError
+                                ? live.currency
+                                : h.currency
+                              : h.customCurrency;
+
+                            const currentValBase = currentPrice
+                              ? convert(currentPrice * h.quantity, curCurrency)
+                              : null;
+                            const costValBase = convert(
+                              h.costPrice * h.quantity,
+                              h.currency
+                            );
+                            const pnlBase = currentValBase
+                              ? currentValBase - costValBase
+                              : null;
+                            const weight =
+                              totalValue > 0 && currentValBase
+                                ? (currentValBase / totalValue) * 100
+                                : 0;
+
+                            return (
+                              <tr
+                                key={h.id}
+                                className="hover:bg-gray-50 transition-colors"
+                              >
+                                {settings.visibleCols.includes('symbol') && (
+                                  <td className="p-4">
+                                    <div className="font-bold text-base text-gray-800">
+                                      {isAuto && !isError && !isFetching
+                                        ? live.name
+                                        : h.name || h.symbol}
+                                      {!isAuto && (
+                                        <span className="text-[10px] bg-yellow-100 text-yellow-700 px-1.5 rounded ml-2 align-middle">
+                                          自定义
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="text-xs text-gray-500 mt-0.5">
+                                      {h.symbol}
+                                    </div>
+                                  </td>
+                                )}
+                                {settings.visibleCols.includes('quantity') && (
+                                  <td className="p-4 text-right font-medium">
+                                    {h.quantity}
+                                  </td>
+                                )}
+                                {settings.visibleCols.includes('price') && (
+                                  <td className="p-4 text-right">
+                                    {isError ? (
+                                      <span className="text-xs text-red-500 bg-red-50 px-2 py-1 rounded">
+                                        获取失败
+                                      </span>
+                                    ) : isFetching ? (
+                                      <span className="text-xs text-blue-500 animate-pulse">
+                                        抓取中...
+                                      </span>
+                                    ) : (
+                                      <>
+                                        <div className="font-bold">
+                                          {currentPrice?.toLocaleString(
+                                            undefined,
+                                            { maximumFractionDigits: 2 }
+                                          )}
+                                        </div>
+                                        <div className="text-xs text-gray-400">
+                                          {curCurrency}
+                                        </div>
+                                      </>
+                                    )}
+                                  </td>
+                                )}
+                                {settings.visibleCols.includes('cost') && (
+                                  <td className="p-4 text-right text-gray-600">
+                                    {h.costPrice.toFixed(2)}{' '}
+                                    <span className="text-[10px] text-gray-400">
+                                      {h.currency}
+                                    </span>
+                                  </td>
+                                )}
+                                {settings.visibleCols.includes('value') && (
+                                  <td className="p-4 text-right font-bold text-gray-700">
+                                    {currentValBase ? (
+                                      <>
+                                        {currentValBase.toLocaleString(
+                                          undefined,
+                                          { maximumFractionDigits: 2 }
+                                        )}
+                                        <span className="text-[10px] text-gray-400 ml-1 block">
+                                          {settings.baseCurrency}
+                                        </span>
+                                      </>
+                                    ) : (
+                                      '-'
+                                    )}
+                                  </td>
+                                )}
+                                {settings.visibleCols.includes('pnl') && (
+                                  <td
+                                    className={`p-4 text-right font-bold ${
+                                      pnlBase && pnlBase >= 0
+                                        ? 'text-red-500'
+                                        : 'text-green-600'
+                                    }`}
+                                  >
+                                    {pnlBase != null ? (
+                                      <>
+                                        {(pnlBase >= 0 ? '+' : '') +
+                                          pnlBase.toLocaleString(undefined, {
+                                            maximumFractionDigits: 2,
+                                          })}
+                                        <span className="text-[10px] ml-1 opacity-70 block">
+                                          {settings.baseCurrency}
+                                        </span>
+                                      </>
+                                    ) : (
+                                      '-'
+                                    )}
+                                  </td>
+                                )}
+                                {settings.visibleCols.includes('weight') && (
+                                  <td className="p-4 text-right font-bold text-gray-600">
+                                    {weight.toFixed(2)}%
+                                  </td>
+                                )}
+                                {settings.visibleCols.includes('tags') && (
+                                  <td className="p-4">
+                                    <div className="flex flex-wrap gap-1 max-w-[150px]">
+                                      {Object.values(h.tags || {})
+                                        .filter(Boolean)
+                                        .map((t: any, i) => (
+                                          <span
+                                            key={i}
+                                            className="text-[10px] bg-gray-100 border text-gray-600 px-2 py-0.5 rounded-full"
+                                          >
+                                            {t}
+                                          </span>
+                                        ))}
+                                    </div>
+                                  </td>
+                                )}
+                                {settings.visibleCols.includes('action') && (
+                                  <td className="p-4 text-right">
+                                    <div className="flex justify-end gap-2">
+                                      <button
+                                        onClick={() => {
+                                          setTradeForm({
+                                            id: h.id,
+                                            trackType: h.trackType,
+                                            symbol: h.symbol,
+                                            name: h.name || h.symbol,
+                                            quantity: h.quantity,
+                                            price: h.costPrice,
+                                            currency: h.currency,
+                                            customPrice: h.customPrice || '',
+                                            customCurrency:
+                                              h.customCurrency || h.currency,
+                                            tags: h.tags || {},
+                                          });
+                                          setModalType('edit');
+                                        }}
+                                        className="text-xs bg-white border text-blue-600 hover:bg-blue-50 px-3 py-1.5 rounded font-bold transition-colors"
+                                      >
+                                        编辑
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          setSellTarget(h);
+                                          setTradeForm({
+                                            ...tradeForm,
+                                            quantity: h.quantity,
+                                            price: currentPrice || h.costPrice,
+                                            currency: curCurrency,
+                                          });
+                                          setModalType('sell');
+                                        }}
+                                        className="text-xs bg-white border border-red-200 text-red-500 hover:bg-red-50 px-3 py-1.5 rounded font-bold transition-colors"
+                                      >
+                                        卖出
+                                      </button>
+                                    </div>
+                                  </td>
+                                )}
+                              </tr>
+                            );
+                          })}
+                        </React.Fragment>
+                      )
+                    )}
                   </tbody>
                 </table>
                 {holdings.length === 0 && (
-                  <div className="text-center py-10 text-gray-400 font-bold">暂无持仓记录，点击右上角“记录买入”开始！</div>
+                  <div className="text-center py-10 text-gray-400 font-bold">
+                    暂无持仓记录，点击右上角“记录买入”开始！
+                  </div>
                 )}
               </div>
             </div>
@@ -742,13 +996,24 @@ export default function PortfolioApp() {
               {[
                 { id: 'holding', label: '持仓标的' },
                 { id: 'currency', label: '结算币种' },
-                ...tagGroups.map((g: any) => ({ id: `tag-${g.name}`, label: g.name })),
+                ...tagGroups.map((g: any) => ({
+                  id: `tag-${g.name}`,
+                  label: g.name,
+                })),
               ].map((opt) => (
                 <button
                   key={opt.id}
-                  onClick={() => setAllocDims((prev) => prev.includes(opt.id) ? prev.filter((x) => x !== opt.id) : [...prev, opt.id])}
+                  onClick={() =>
+                    setAllocDims((prev) =>
+                      prev.includes(opt.id)
+                        ? prev.filter((x) => x !== opt.id)
+                        : [...prev, opt.id]
+                    )
+                  }
                   className={`px-4 py-1.5 rounded-full text-sm font-bold transition-colors border ${
-                    allocDims.includes(opt.id) ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-white border-gray-200 text-gray-600'
+                    allocDims.includes(opt.id)
+                      ? 'bg-blue-50 border-blue-200 text-blue-600'
+                      : 'bg-white border-gray-200 text-gray-600'
                   }`}
                 >
                   {opt.label}
@@ -759,20 +1024,51 @@ export default function PortfolioApp() {
             <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
               {allocDims.map((dim) => {
                 const data = getAllocData(dim);
-                const title = dim === 'holding' ? '持仓标的' : dim === 'currency' ? '结算币种' : dim.replace('tag-', '');
+                const title =
+                  dim === 'holding'
+                    ? '持仓标的'
+                    : dim === 'currency'
+                    ? '结算币种'
+                    : dim.replace('tag-', '');
 
                 return (
-                  <div key={dim} className="bg-white p-6 rounded-xl shadow-sm border h-80 flex flex-col items-center">
-                    <h3 className="text-lg font-bold text-gray-700 mb-4 w-full text-center">{title} 分布</h3>
+                  <div
+                    key={dim}
+                    className="bg-white p-6 rounded-xl shadow-sm border h-80 flex flex-col items-center"
+                  >
+                    <h3 className="text-lg font-bold text-gray-700 mb-4 w-full text-center">
+                      {title} 分布
+                    </h3>
                     {data.length === 0 ? (
-                      <div className="text-gray-400 m-auto font-bold flex items-center h-full">暂无数据</div>
+                      <div className="text-gray-400 m-auto font-bold flex items-center h-full">
+                        暂无数据
+                      </div>
                     ) : (
                       <ResponsiveContainer width="100%" height="100%">
                         <PieChart>
-                          <Pie data={data} cx="50%" cy="50%" innerRadius="50%" outerRadius="80%" paddingAngle={2} dataKey="value">
-                            {data.map((_, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
+                          <Pie
+                            data={data}
+                            cx="50%"
+                            cy="50%"
+                            innerRadius="50%"
+                            outerRadius="80%"
+                            paddingAngle={2}
+                            dataKey="value"
+                          >
+                            {data.map((_, index) => (
+                              <Cell
+                                key={`cell-${index}`}
+                                fill={COLORS[index % COLORS.length]}
+                              />
+                            ))}
                           </Pie>
-                          <Tooltip formatter={(value: any) => `${value.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${settings.baseCurrency}`} />
+                          <Tooltip
+                            formatter={(value: any) =>
+                              `${value.toLocaleString(undefined, {
+                                maximumFractionDigits: 2,
+                              })} ${settings.baseCurrency}`
+                            }
+                          />
                           <Legend verticalAlign="bottom" height={36} />
                         </PieChart>
                       </ResponsiveContainer>
@@ -787,7 +1083,9 @@ export default function PortfolioApp() {
         {activeTab === 'timeline' && (
           <div className="space-y-6">
             <div className="bg-white p-6 rounded-xl shadow-sm border">
-              <h3 className="text-lg font-bold mb-6 text-gray-700">总资产历史走势 ({settings.baseCurrency})</h3>
+              <h3 className="text-lg font-bold mb-6 text-gray-700">
+                总资产历史走势 ({settings.baseCurrency})
+              </h3>
               <div className="h-80">
                 {snapshots.length < 2 ? (
                   <div className="h-full flex items-center justify-center text-gray-400 bg-gray-50 rounded-lg border border-dashed font-bold p-6 text-center">
@@ -796,64 +1094,112 @@ export default function PortfolioApp() {
                 ) : (
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={snapshots}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
-                      <XAxis dataKey="date" tick={{ fontSize: 12, fill: '#6b7280' }} axisLine={false} tickLine={false} />
-                      <YAxis domain={['auto', 'auto']} tickFormatter={(v) => v.toLocaleString()} tick={{ fontSize: 12, fill: '#6b7280' }} axisLine={false} tickLine={false} width={80} />
+                      <CartesianGrid
+                        strokeDasharray="3 3"
+                        vertical={false}
+                        stroke="#e5e7eb"
+                      />
+                      <XAxis
+                        dataKey="date"
+                        tick={{ fontSize: 12, fill: '#6b7280' }}
+                        axisLine={false}
+                        tickLine={false}
+                      />
+                      <YAxis
+                        domain={['auto', 'auto']}
+                        tickFormatter={(v) => v.toLocaleString()}
+                        tick={{ fontSize: 12, fill: '#6b7280' }}
+                        axisLine={false}
+                        tickLine={false}
+                        width={80}
+                      />
                       <Tooltip
-                        formatter={(value: any) => `${value.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${settings.baseCurrency}`}
+                        formatter={(value: any) =>
+                          `${value.toLocaleString(undefined, {
+                            maximumFractionDigits: 2,
+                          })} ${settings.baseCurrency}`
+                        }
                         labelStyle={{ color: '#374151', fontWeight: 'bold' }}
                       />
-                      <Line type="monotone" dataKey="value" stroke="#3b82f6" strokeWidth={3} dot={{ r: 4, strokeWidth: 2 }} activeDot={{ r: 6 }} />
+                      <Line
+                        type="monotone"
+                        dataKey="value"
+                        stroke="#3b82f6"
+                        strokeWidth={3}
+                        dot={{ r: 4, strokeWidth: 2 }}
+                        activeDot={{ r: 6 }}
+                      />
                     </LineChart>
                   </ResponsiveContainer>
                 )}
               </div>
             </div>
-
-            {/* 新增：历史每日变化表 */}
-            {enrichedSnapshots.length > 0 && (
-              <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
-                <div className="p-5 border-b bg-gray-50">
-                  <h3 className="text-lg font-bold text-gray-700">每日资产快照日历</h3>
-                </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left whitespace-nowrap text-sm">
-                    <thead className="text-gray-500 border-b">
-                      <tr>
-                        <th className="p-4 font-semibold">记录日期</th>
-                        <th className="p-4 font-semibold text-right">总资产 ({settings.baseCurrency})</th>
-                        <th className="p-4 font-semibold text-right">较上次变化额</th>
-                        <th className="p-4 font-semibold text-right">变化幅度</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y">
-                      {enrichedSnapshots.map((snap) => (
-                        <tr key={snap.date} className="hover:bg-gray-50 transition-colors">
-                          <td className="p-4 font-bold text-gray-700">{snap.date}</td>
-                          <td className="p-4 text-right font-bold text-gray-800">
-                            {snap.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                          </td>
-                          <td className={`p-4 text-right font-bold ${snap.diffAmount > 0 ? 'text-red-500' : snap.diffAmount < 0 ? 'text-green-600' : 'text-gray-400'}`}>
-                            {snap.diffAmount > 0 ? '+' : ''}
-                            {snap.diffAmount !== 0 ? snap.diffAmount.toLocaleString(undefined, { maximumFractionDigits: 2 }) : '-'}
-                          </td>
-                          <td className={`p-4 text-right font-bold ${snap.diffPercent > 0 ? 'text-red-500' : snap.diffPercent < 0 ? 'text-green-600' : 'text-gray-400'}`}>
-                            {snap.diffPercent > 0 ? '+' : ''}
-                            {snap.diffPercent !== 0 ? `${snap.diffPercent.toFixed(2)}%` : '-'}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
+            {renderCalendar()}
           </div>
         )}
 
         {activeTab === 'settings' && (
           <div className="grid md:grid-cols-2 gap-6">
             <div className="bg-white p-6 rounded-xl shadow-sm border">
+              <h3 className="text-lg font-bold mb-6 border-b pb-2">基础设置</h3>
+
+              <div className="mb-6">
+                <label className="block text-sm font-semibold mb-2 text-gray-700">
+                  全局基础货币 (显示单位)
+                </label>
+                <select
+                  className="w-full border rounded-lg p-2 outline-none bg-gray-50 focus:border-blue-500 font-bold"
+                  value={settings.baseCurrency}
+                  onChange={(e) =>
+                    setSettings({ ...settings, baseCurrency: e.target.value })
+                  }
+                >
+                  {CURRENCIES.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 mt-2">
+                  更改后，所有现值、盈亏和图表将按照实时汇率转换为该币种。
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-white p-6 rounded-xl shadow-sm border">
+              <h3 className="text-lg font-bold mb-6 border-b pb-2">
+                数据安全与迁移
+              </h3>
+              <p className="text-sm text-gray-600 mb-4">
+                你的所有数据均安全地保存在当前浏览器的本地存储中，不会上传到任何服务器。
+                如果需要更换设备或备份，请使用以下功能：
+              </p>
+
+              <div className="flex gap-4">
+                <button
+                  onClick={handleExport}
+                  className="flex-1 bg-green-600 text-white py-2 rounded-lg font-bold shadow-sm hover:bg-green-700 transition-colors"
+                >
+                  ⬇️ 导出备份 (.json)
+                </button>
+
+                <input
+                  type="file"
+                  accept=".json"
+                  ref={fileInputRef}
+                  onChange={handleImport}
+                  className="hidden"
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex-1 bg-white border border-gray-300 text-gray-700 py-2 rounded-lg font-bold shadow-sm hover:bg-gray-50 transition-colors"
+                >
+                  ⬆️ 导入备份
+                </button>
+              </div>
+            </div>
+
+            <div className="bg-white p-6 rounded-xl shadow-sm border md:col-span-2">
               <h3 className="text-lg font-bold mb-4">自定义标签组管理</h3>
               <div className="flex gap-2 mb-6">
                 <input
@@ -864,9 +1210,18 @@ export default function PortfolioApp() {
                 />
                 <button
                   onClick={() => {
-                    const input = document.getElementById('newGroupName') as HTMLInputElement;
+                    const input = document.getElementById(
+                      'newGroupName'
+                    ) as HTMLInputElement;
                     if (input && input.value) {
-                      setTagGroups([...tagGroups, { id: Date.now().toString(), name: input.value, values: [] }]);
+                      setTagGroups([
+                        ...tagGroups,
+                        {
+                          id: Date.now().toString(),
+                          name: input.value,
+                          values: [],
+                        },
+                      ]);
                       input.value = '';
                     }
                   }}
@@ -875,22 +1230,49 @@ export default function PortfolioApp() {
                   新建组
                 </button>
               </div>
-              <div className="space-y-4">
+              <div className="grid md:grid-cols-2 gap-4">
                 {tagGroups.map((group: any) => (
-                  <div key={group.id} className="p-4 border rounded-lg bg-gray-50 relative">
+                  <div
+                    key={group.id}
+                    className="p-4 border rounded-lg bg-gray-50 relative"
+                  >
                     <button
-                      onClick={() => setTagGroups(tagGroups.filter((g) => g.id !== group.id))}
+                      onClick={() =>
+                        setTagGroups(tagGroups.filter((g) => g.id !== group.id))
+                      }
                       className="absolute top-2 right-2 text-red-400 text-xs hover:text-red-600 font-bold"
-                    >删除组</button>
-                    <div className="font-bold text-gray-700 mb-2">{group.name}</div>
+                    >
+                      删除组
+                    </button>
+                    <div className="font-bold text-gray-700 mb-2">
+                      {group.name}
+                    </div>
                     <div className="flex flex-wrap gap-2 mb-3">
                       {group.values.map((v: string) => (
-                        <span key={v} className="bg-white border text-xs px-2 py-1 rounded-full flex items-center gap-1 font-medium">
+                        <span
+                          key={v}
+                          className="bg-white border text-xs px-2 py-1 rounded-full flex items-center gap-1 font-medium"
+                        >
                           {v}
                           <span
                             className="cursor-pointer text-gray-400 hover:text-red-500 w-4 h-4 flex items-center justify-center rounded-full hover:bg-red-50 transition-colors"
-                            onClick={() => setTagGroups(tagGroups.map((g) => g.id === group.id ? { ...g, values: g.values.filter((val: string) => val !== v) } : g))}
-                          >×</span>
+                            onClick={() =>
+                              setTagGroups(
+                                tagGroups.map((g) =>
+                                  g.id === group.id
+                                    ? {
+                                        ...g,
+                                        values: g.values.filter(
+                                          (val: string) => val !== v
+                                        ),
+                                      }
+                                    : g
+                                )
+                              )
+                            }
+                          >
+                            ×
+                          </span>
                         </span>
                       ))}
                     </div>
@@ -901,7 +1283,16 @@ export default function PortfolioApp() {
                       onKeyDown={(e) => {
                         const target = e.target as HTMLInputElement;
                         if (e.key === 'Enter' && target.value.trim()) {
-                          setTagGroups(tagGroups.map((g) => g.id === group.id ? { ...g, values: [...g.values, target.value.trim()] } : g));
+                          setTagGroups(
+                            tagGroups.map((g) =>
+                              g.id === group.id
+                                ? {
+                                    ...g,
+                                    values: [...g.values, target.value.trim()],
+                                  }
+                                : g
+                            )
+                          );
                           target.value = '';
                         }
                       }}
@@ -914,34 +1305,105 @@ export default function PortfolioApp() {
         )}
       </div>
 
-      {/* 弹窗组件 - 保持原有功能，仅在输入框旁增加了 Tooltip */}
       {modalType === 'cash' && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden animate-fade-in">
             <div className="p-5 border-b bg-gray-50 flex justify-between">
               <h3 className="font-bold text-lg">现金管理</h3>
-              <button onClick={() => setModalType(null)} className="text-gray-400 font-bold text-xl hover:text-gray-600">×</button>
+              <button
+                onClick={() => setModalType(null)}
+                className="text-gray-400 font-bold text-xl hover:text-gray-600"
+              >
+                ×
+              </button>
             </div>
             <form onSubmit={handleCashSubmit} className="p-5 space-y-4">
               <div className="flex bg-gray-100 p-1 rounded-lg">
-                <button type="button" onClick={() => setTradeForm({ ...tradeForm, cashOp: 'add' })} className={`flex-1 py-1.5 text-sm font-bold rounded-md transition-colors ${tradeForm.cashOp === 'add' ? 'bg-white shadow-sm text-green-600' : 'text-gray-500 hover:text-gray-700'}`}>存入</button>
-                <button type="button" onClick={() => setTradeForm({ ...tradeForm, cashOp: 'sub' })} className={`flex-1 py-1.5 text-sm font-bold rounded-md transition-colors ${tradeForm.cashOp === 'sub' ? 'bg-white shadow-sm text-red-600' : 'text-gray-500 hover:text-gray-700'}`}>取出</button>
-                <button type="button" onClick={() => setTradeForm({ ...tradeForm, cashOp: 'set' })} className={`flex-1 py-1.5 text-sm font-bold rounded-md transition-colors ${tradeForm.cashOp === 'set' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}>设置总额</button>
+                <button
+                  type="button"
+                  onClick={() => setTradeForm({ ...tradeForm, cashOp: 'add' })}
+                  className={`flex-1 py-1.5 text-sm font-bold rounded-md transition-colors ${
+                    tradeForm.cashOp === 'add'
+                      ? 'bg-white shadow-sm text-green-600'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  存入
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTradeForm({ ...tradeForm, cashOp: 'sub' })}
+                  className={`flex-1 py-1.5 text-sm font-bold rounded-md transition-colors ${
+                    tradeForm.cashOp === 'sub'
+                      ? 'bg-white shadow-sm text-red-600'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  取出
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTradeForm({ ...tradeForm, cashOp: 'set' })}
+                  className={`flex-1 py-1.5 text-sm font-bold rounded-md transition-colors ${
+                    tradeForm.cashOp === 'set'
+                      ? 'bg-white shadow-sm text-blue-600'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  设置总额
+                </button>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-semibold mb-1">{tradeForm.cashOp === 'set' ? '最终金额' : '操作金额'}</label>
-                  <input type="number" step="0.01" required className="w-full border rounded-lg p-2 outline-none focus:border-blue-500" value={tradeForm.amount} onChange={(e) => setTradeForm({ ...tradeForm, amount: e.target.value })} />
+                  <label className="block text-sm font-semibold mb-1">
+                    {tradeForm.cashOp === 'set' ? '最终金额' : '操作金额'}
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    required
+                    className="w-full border rounded-lg p-2 outline-none focus:border-blue-500"
+                    value={tradeForm.amount}
+                    onChange={(e) =>
+                      setTradeForm({ ...tradeForm, amount: e.target.value })
+                    }
+                  />
                 </div>
                 <div>
-                  <label className="block text-sm font-semibold mb-1">币种</label>
-                  <select className="w-full border rounded-lg p-2 bg-gray-50 outline-none" value={tradeForm.currency} onChange={(e) => setTradeForm({ ...tradeForm, currency: e.target.value })}>
-                    {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                  <label className="block text-sm font-semibold mb-1">
+                    币种
+                  </label>
+                  <select
+                    className="w-full border rounded-lg p-2 bg-gray-50 outline-none"
+                    value={tradeForm.currency}
+                    onChange={(e) =>
+                      setTradeForm({ ...tradeForm, currency: e.target.value })
+                    }
+                  >
+                    {CURRENCIES.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
-              <button type="submit" className={`w-full py-2.5 rounded-lg font-bold text-white shadow-sm transition-colors ${tradeForm.cashOp === 'add' ? 'bg-green-600 hover:bg-green-700' : tradeForm.cashOp === 'sub' ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'}`}>
-                确认{tradeForm.cashOp === 'add' ? '存入' : tradeForm.cashOp === 'sub' ? '取出' : '强制修改为该总额'}
+              <button
+                type="submit"
+                className={`w-full py-2.5 rounded-lg font-bold text-white shadow-sm transition-colors ${
+                  tradeForm.cashOp === 'add'
+                    ? 'bg-green-600 hover:bg-green-700'
+                    : tradeForm.cashOp === 'sub'
+                    ? 'bg-red-600 hover:bg-red-700'
+                    : 'bg-blue-600 hover:bg-blue-700'
+                }`}
+              >
+                确认
+                {tradeForm.cashOp === 'add'
+                  ? '存入'
+                  : tradeForm.cashOp === 'sub'
+                  ? '取出'
+                  : '强制修改为该总额'}
               </button>
             </form>
           </div>
@@ -956,59 +1418,169 @@ export default function PortfolioApp() {
                 编辑标的 {tradeForm.symbol}
                 <TickerTooltip />
               </h3>
-              <button onClick={() => setModalType(null)} className="text-gray-400 font-bold text-xl hover:text-gray-600">×</button>
+              <button
+                onClick={() => setModalType(null)}
+                className="text-gray-400 font-bold text-xl hover:text-gray-600"
+              >
+                ×
+              </button>
             </div>
-            <form onSubmit={handleEditSubmit} className="p-5 max-h-[75vh] overflow-y-auto space-y-4">
-              <div className="text-xs text-gray-500 bg-gray-50 p-2 rounded mb-2">修改参数不会导致现金变动，仅用于修正记录和重新分配标签。</div>
+            <form
+              onSubmit={handleEditSubmit}
+              className="p-5 max-h-[75vh] overflow-y-auto space-y-4"
+            >
+              <div className="text-xs text-gray-500 bg-gray-50 p-2 rounded mb-2">
+                修改参数不会导致现金变动，仅用于修正记录和重新分配标签。
+              </div>
               {tradeForm.trackType === 'custom' && (
                 <div>
-                  <label className="block text-sm font-semibold mb-1">自定义名称</label>
-                  <input type="text" required className="w-full border rounded-lg p-2 outline-none focus:border-blue-500" value={tradeForm.name} onChange={(e) => setTradeForm({ ...tradeForm, name: e.target.value })} />
+                  <label className="block text-sm font-semibold mb-1">
+                    自定义名称
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    className="w-full border rounded-lg p-2 outline-none focus:border-blue-500"
+                    value={tradeForm.name}
+                    onChange={(e) =>
+                      setTradeForm({ ...tradeForm, name: e.target.value })
+                    }
+                  />
                 </div>
               )}
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-semibold mb-1">当前持有数量</label>
-                  <input type="number" step="0.0001" required className="w-full border rounded-lg p-2 outline-none focus:border-blue-500" value={tradeForm.quantity} onChange={(e) => setTradeForm({ ...tradeForm, quantity: e.target.value })} />
+                  <label className="block text-sm font-semibold mb-1">
+                    当前持有数量
+                  </label>
+                  <input
+                    type="number"
+                    step="0.0001"
+                    required
+                    className="w-full border rounded-lg p-2 outline-none focus:border-blue-500"
+                    value={tradeForm.quantity}
+                    onChange={(e) =>
+                      setTradeForm({ ...tradeForm, quantity: e.target.value })
+                    }
+                  />
                 </div>
                 <div>
-                  <label className="block text-sm font-semibold mb-1">平均成本单价</label>
+                  <label className="block text-sm font-semibold mb-1">
+                    平均成本单价
+                  </label>
                   <div className="flex gap-1">
-                    <input type="number" step="0.01" required className="w-full border rounded-lg p-2 outline-none flex-1 min-w-0 focus:border-blue-500" value={tradeForm.price} onChange={(e) => setTradeForm({ ...tradeForm, price: e.target.value })} />
-                    <select className="border rounded-lg px-1 bg-gray-50 text-xs outline-none" value={tradeForm.currency} onChange={(e) => setTradeForm({ ...tradeForm, currency: e.target.value })}>
-                      {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                    <input
+                      type="number"
+                      step="0.01"
+                      required
+                      className="w-full border rounded-lg p-2 outline-none flex-1 min-w-0 focus:border-blue-500"
+                      value={tradeForm.price}
+                      onChange={(e) =>
+                        setTradeForm({ ...tradeForm, price: e.target.value })
+                      }
+                    />
+                    <select
+                      className="border rounded-lg px-1 bg-gray-50 text-xs outline-none"
+                      value={tradeForm.currency}
+                      onChange={(e) =>
+                        setTradeForm({ ...tradeForm, currency: e.target.value })
+                      }
+                    >
+                      {CURRENCIES.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
                     </select>
                   </div>
                 </div>
               </div>
               {tradeForm.trackType === 'custom' && (
                 <div>
-                  <label className="block text-sm font-semibold mb-1 text-yellow-600">当前现价 (手动更新)</label>
+                  <label className="block text-sm font-semibold mb-1 text-yellow-600">
+                    当前现价 (手动更新)
+                  </label>
                   <div className="flex gap-2">
-                    <input type="number" step="0.01" required className="w-full border border-yellow-300 bg-yellow-50 rounded-lg p-2 outline-none flex-1 focus:border-yellow-500" value={tradeForm.customPrice} onChange={(e) => setTradeForm({ ...tradeForm, customPrice: e.target.value })} />
-                    <select className="border border-yellow-300 rounded-lg p-2 bg-yellow-50 outline-none" value={tradeForm.customCurrency} onChange={(e) => setTradeForm({ ...tradeForm, customCurrency: e.target.value })}>
-                      {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                    <input
+                      type="number"
+                      step="0.01"
+                      required
+                      className="w-full border border-yellow-300 bg-yellow-50 rounded-lg p-2 outline-none flex-1 focus:border-yellow-500"
+                      value={tradeForm.customPrice}
+                      onChange={(e) =>
+                        setTradeForm({
+                          ...tradeForm,
+                          customPrice: e.target.value,
+                        })
+                      }
+                    />
+                    <select
+                      className="border border-yellow-300 rounded-lg p-2 bg-yellow-50 outline-none"
+                      value={tradeForm.customCurrency}
+                      onChange={(e) =>
+                        setTradeForm({
+                          ...tradeForm,
+                          customCurrency: e.target.value,
+                        })
+                      }
+                    >
+                      {CURRENCIES.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
                     </select>
                   </div>
                 </div>
               )}
               <div className="pt-4 border-t">
-                <p className="text-sm font-bold text-gray-700 mb-3">重新分配标签</p>
+                <p className="text-sm font-bold text-gray-700 mb-3">
+                  重新分配标签
+                </p>
                 <div className="grid grid-cols-2 gap-4">
                   {tagGroups.map((group: any) => (
                     <div key={group.id}>
-                      <label className="block text-xs text-gray-500 mb-1">{group.name}</label>
-                      <select className="w-full border rounded-lg p-2 text-sm outline-none bg-gray-50" value={tradeForm.tags[group.name] || ''} onChange={(e) => setTradeForm({ ...tradeForm, tags: { ...tradeForm.tags, [group.name]: e.target.value } })}>
+                      <label className="block text-xs text-gray-500 mb-1">
+                        {group.name}
+                      </label>
+                      <select
+                        className="w-full border rounded-lg p-2 text-sm outline-none bg-gray-50"
+                        value={tradeForm.tags[group.name] || ''}
+                        onChange={(e) =>
+                          setTradeForm({
+                            ...tradeForm,
+                            tags: {
+                              ...tradeForm.tags,
+                              [group.name]: e.target.value,
+                            },
+                          })
+                        }
+                      >
                         <option value="">未分类</option>
-                        {group.values.map((v: string) => <option key={v} value={v}>{v}</option>)}
+                        {group.values.map((v: string) => (
+                          <option key={v} value={v}>
+                            {v}
+                          </option>
+                        ))}
                       </select>
                     </div>
                   ))}
                 </div>
               </div>
               <div className="pt-4 flex gap-3">
-                <button type="button" onClick={() => setModalType(null)} className="flex-1 bg-gray-100 text-gray-700 py-2 rounded-lg font-bold hover:bg-gray-200 transition-colors">取消</button>
-                <button type="submit" className="flex-1 bg-blue-600 text-white py-2 rounded-lg font-bold shadow-md hover:bg-blue-700 transition-colors">确认修改</button>
+                <button
+                  type="button"
+                  onClick={() => setModalType(null)}
+                  className="flex-1 bg-gray-100 text-gray-700 py-2 rounded-lg font-bold hover:bg-gray-200 transition-colors"
+                >
+                  取消
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 bg-blue-600 text-white py-2 rounded-lg font-bold shadow-md hover:bg-blue-700 transition-colors"
+                >
+                  确认修改
+                </button>
               </div>
             </form>
           </div>
@@ -1019,28 +1591,85 @@ export default function PortfolioApp() {
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden animate-fade-in">
             <div className="p-5 border-b bg-red-50 flex justify-between">
-              <h3 className="font-bold text-lg text-red-600">卖出 {sellTarget.symbol}</h3>
-              <button onClick={() => setModalType(null)} className="text-gray-400 font-bold text-xl hover:text-gray-600">×</button>
+              <h3 className="font-bold text-lg text-red-600">
+                卖出 {sellTarget.symbol}
+              </h3>
+              <button
+                onClick={() => setModalType(null)}
+                className="text-gray-400 font-bold text-xl hover:text-gray-600"
+              >
+                ×
+              </button>
             </div>
             <form onSubmit={handleSellSubmit} className="p-5 space-y-4">
-              <div className="text-xs text-gray-500 font-bold bg-gray-50 p-2 rounded">当前持有: {sellTarget.quantity}</div>
+              <div className="text-xs text-gray-500 font-bold bg-gray-50 p-2 rounded">
+                当前持有: {sellTarget.quantity}
+              </div>
               <div>
-                <label className="block text-sm font-semibold mb-1">卖出数量</label>
+                <label className="block text-sm font-semibold mb-1">
+                  卖出数量
+                </label>
                 <div className="flex gap-2">
-                  <input type="number" step="0.0001" required className="w-full border rounded-lg p-2 outline-none flex-1 focus:border-red-500" value={tradeForm.quantity} onChange={(e) => setTradeForm({ ...tradeForm, quantity: e.target.value })} />
-                  <button type="button" onClick={() => setTradeForm({ ...tradeForm, quantity: sellTarget.quantity })} className="bg-gray-100 px-3 rounded-lg text-xs font-bold text-gray-600 hover:bg-gray-200 transition-colors">全仓</button>
+                  <input
+                    type="number"
+                    step="0.0001"
+                    required
+                    className="w-full border rounded-lg p-2 outline-none flex-1 focus:border-red-500"
+                    value={tradeForm.quantity}
+                    onChange={(e) =>
+                      setTradeForm({ ...tradeForm, quantity: e.target.value })
+                    }
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setTradeForm({
+                        ...tradeForm,
+                        quantity: sellTarget.quantity,
+                      })
+                    }
+                    className="bg-gray-100 px-3 rounded-lg text-xs font-bold text-gray-600 hover:bg-gray-200 transition-colors"
+                  >
+                    全仓
+                  </button>
                 </div>
               </div>
               <div>
-                <label className="block text-sm font-semibold mb-1">成交单价</label>
+                <label className="block text-sm font-semibold mb-1">
+                  成交单价
+                </label>
                 <div className="flex gap-2">
-                  <input type="number" step="0.01" required className="w-full border rounded-lg p-2 outline-none flex-1 focus:border-red-500" value={tradeForm.price} onChange={(e) => setTradeForm({ ...tradeForm, price: e.target.value })} />
-                  <select className="border rounded-lg p-2 bg-gray-50 text-sm outline-none" value={tradeForm.currency} onChange={(e) => setTradeForm({ ...tradeForm, currency: e.target.value })}>
-                    {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                  <input
+                    type="number"
+                    step="0.01"
+                    required
+                    className="w-full border rounded-lg p-2 outline-none flex-1 focus:border-red-500"
+                    value={tradeForm.price}
+                    onChange={(e) =>
+                      setTradeForm({ ...tradeForm, price: e.target.value })
+                    }
+                  />
+                  <select
+                    className="border rounded-lg p-2 bg-gray-50 text-sm outline-none"
+                    value={tradeForm.currency}
+                    onChange={(e) =>
+                      setTradeForm({ ...tradeForm, currency: e.target.value })
+                    }
+                  >
+                    {CURRENCIES.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
-              <button type="submit" className="w-full py-2.5 rounded-lg font-bold text-white shadow-sm bg-red-600 hover:bg-red-700 transition-colors mt-2">确认卖出 (资金将转入现金)</button>
+              <button
+                type="submit"
+                className="w-full py-2.5 rounded-lg font-bold text-white shadow-sm bg-red-600 hover:bg-red-700 transition-colors mt-2"
+              >
+                确认卖出 (资金将转入现金)
+              </button>
             </form>
           </div>
         </div>
@@ -1050,79 +1679,261 @@ export default function PortfolioApp() {
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-fade-in">
             <div className="p-5 border-b bg-blue-50 flex justify-between items-center">
-              <h3 className="font-bold text-lg text-blue-700">记录买入 {tradeStep === 2 && '- 分配标签'}</h3>
-              <button onClick={() => setModalType(null)} className="text-gray-400 font-bold text-xl hover:text-gray-600">×</button>
+              <h3 className="font-bold text-lg text-blue-700">
+                记录买入 {tradeStep === 2 && '- 分配标签'}
+              </h3>
+              <button
+                onClick={() => setModalType(null)}
+                className="text-gray-400 font-bold text-xl hover:text-gray-600"
+              >
+                ×
+              </button>
             </div>
-            <form onSubmit={handleBuySubmit} className="p-5 max-h-[75vh] overflow-y-auto">
+            <form
+              onSubmit={handleBuySubmit}
+              className="p-5 max-h-[75vh] overflow-y-auto"
+            >
               {tradeStep === 1 ? (
                 <div className="space-y-4">
                   <div className="flex bg-gray-100 p-1 rounded-lg mb-4">
-                    <button type="button" onClick={() => setTradeForm({ ...tradeForm, trackType: 'auto' })} className={`flex-1 py-1.5 text-sm font-bold rounded-md transition-colors ${tradeForm.trackType === 'auto' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}>自动追踪价格</button>
-                    <button type="button" onClick={() => setTradeForm({ ...tradeForm, trackType: 'custom' })} className={`flex-1 py-1.5 text-sm font-bold rounded-md transition-colors ${tradeForm.trackType === 'custom' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}>自定义固定标的</button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setTradeForm({ ...tradeForm, trackType: 'auto' })
+                      }
+                      className={`flex-1 py-1.5 text-sm font-bold rounded-md transition-colors ${
+                        tradeForm.trackType === 'auto'
+                          ? 'bg-white shadow-sm text-blue-600'
+                          : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      自动追踪价格
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setTradeForm({ ...tradeForm, trackType: 'custom' })
+                      }
+                      className={`flex-1 py-1.5 text-sm font-bold rounded-md transition-colors ${
+                        tradeForm.trackType === 'custom'
+                          ? 'bg-white shadow-sm text-blue-600'
+                          : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      自定义固定标的
+                    </button>
                   </div>
                   {tradeForm.trackType === 'auto' ? (
                     <div>
-                      <label className="block text-sm font-semibold mb-1 flex items-center">标的代码 <TickerTooltip /></label>
-                      <input type="text" required placeholder="如 NVDA 或 0700.HK" className="w-full border rounded-lg p-2 uppercase outline-none focus:border-blue-500" value={tradeForm.symbol} onChange={(e) => setTradeForm({ ...tradeForm, symbol: e.target.value })} />
+                      <label className="block text-sm font-semibold mb-1 flex items-center">
+                        标的代码 <TickerTooltip />
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="如 NVDA 或 0700.HK"
+                        className="w-full border rounded-lg p-2 uppercase outline-none focus:border-blue-500"
+                        value={tradeForm.symbol}
+                        onChange={(e) =>
+                          setTradeForm({ ...tradeForm, symbol: e.target.value })
+                        }
+                      />
                     </div>
                   ) : (
                     <div className="grid grid-cols-2 gap-4">
                       <div>
-                        <label className="block text-sm font-semibold mb-1 flex items-center">代码 <TickerTooltip /></label>
-                        <input type="text" required className="w-full border rounded-lg p-2 uppercase outline-none focus:border-blue-500" value={tradeForm.symbol} onChange={(e) => setTradeForm({ ...tradeForm, symbol: e.target.value })} />
+                        <label className="block text-sm font-semibold mb-1 flex items-center">
+                          代码 <TickerTooltip />
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          className="w-full border rounded-lg p-2 uppercase outline-none focus:border-blue-500"
+                          value={tradeForm.symbol}
+                          onChange={(e) =>
+                            setTradeForm({
+                              ...tradeForm,
+                              symbol: e.target.value,
+                            })
+                          }
+                        />
                       </div>
                       <div>
-                        <label className="block text-sm font-semibold mb-1">名称</label>
-                        <input type="text" required className="w-full border rounded-lg p-2 outline-none focus:border-blue-500" value={tradeForm.name} onChange={(e) => setTradeForm({ ...tradeForm, name: e.target.value })} />
+                        <label className="block text-sm font-semibold mb-1">
+                          名称
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          className="w-full border rounded-lg p-2 outline-none focus:border-blue-500"
+                          value={tradeForm.name}
+                          onChange={(e) =>
+                            setTradeForm({ ...tradeForm, name: e.target.value })
+                          }
+                        />
                       </div>
                     </div>
                   )}
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-sm font-semibold mb-1">买入数量</label>
-                      <input type="number" step="0.0001" required className="w-full border rounded-lg p-2 outline-none focus:border-blue-500" value={tradeForm.quantity} onChange={(e) => setTradeForm({ ...tradeForm, quantity: e.target.value })} />
+                      <label className="block text-sm font-semibold mb-1">
+                        买入数量
+                      </label>
+                      <input
+                        type="number"
+                        step="0.0001"
+                        required
+                        className="w-full border rounded-lg p-2 outline-none focus:border-blue-500"
+                        value={tradeForm.quantity}
+                        onChange={(e) =>
+                          setTradeForm({
+                            ...tradeForm,
+                            quantity: e.target.value,
+                          })
+                        }
+                      />
                     </div>
                     <div>
-                      <label className="block text-sm font-semibold mb-1">成本单价</label>
+                      <label className="block text-sm font-semibold mb-1">
+                        成本单价
+                      </label>
                       <div className="flex gap-1">
-                        <input type="number" step="0.01" required className="w-full border rounded-lg p-2 outline-none flex-1 min-w-0 focus:border-blue-500" value={tradeForm.price} onChange={(e) => setTradeForm({ ...tradeForm, price: e.target.value })} />
-                        <select className="border rounded-lg px-1 bg-gray-50 text-xs outline-none" value={tradeForm.currency} onChange={(e) => setTradeForm({ ...tradeForm, currency: e.target.value })}>
-                          {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                        <input
+                          type="number"
+                          step="0.01"
+                          required
+                          className="w-full border rounded-lg p-2 outline-none flex-1 min-w-0 focus:border-blue-500"
+                          value={tradeForm.price}
+                          onChange={(e) =>
+                            setTradeForm({
+                              ...tradeForm,
+                              price: e.target.value,
+                            })
+                          }
+                        />
+                        <select
+                          className="border rounded-lg px-1 bg-gray-50 text-xs outline-none"
+                          value={tradeForm.currency}
+                          onChange={(e) =>
+                            setTradeForm({
+                              ...tradeForm,
+                              currency: e.target.value,
+                            })
+                          }
+                        >
+                          {CURRENCIES.map((c) => (
+                            <option key={c} value={c}>
+                              {c}
+                            </option>
+                          ))}
                         </select>
                       </div>
                     </div>
                   </div>
                   {tradeForm.trackType === 'custom' && (
                     <div>
-                      <label className="block text-sm font-semibold mb-1 text-yellow-600">当前现价 (手动录入)</label>
+                      <label className="block text-sm font-semibold mb-1 text-yellow-600">
+                        当前现价 (手动录入)
+                      </label>
                       <div className="flex gap-2">
-                        <input type="number" step="0.01" required className="w-full border border-yellow-300 bg-yellow-50 rounded-lg p-2 outline-none flex-1 focus:border-yellow-500" value={tradeForm.customPrice} onChange={(e) => setTradeForm({ ...tradeForm, customPrice: e.target.value })} />
-                        <select className="border border-yellow-300 rounded-lg p-2 bg-yellow-50 outline-none" value={tradeForm.customCurrency} onChange={(e) => setTradeForm({ ...tradeForm, customCurrency: e.target.value })}>
-                          {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                        <input
+                          type="number"
+                          step="0.01"
+                          required
+                          className="w-full border border-yellow-300 bg-yellow-50 rounded-lg p-2 outline-none flex-1 focus:border-yellow-500"
+                          value={tradeForm.customPrice}
+                          onChange={(e) =>
+                            setTradeForm({
+                              ...tradeForm,
+                              customPrice: e.target.value,
+                            })
+                          }
+                        />
+                        <select
+                          className="border border-yellow-300 rounded-lg p-2 bg-yellow-50 outline-none"
+                          value={tradeForm.customCurrency}
+                          onChange={(e) =>
+                            setTradeForm({
+                              ...tradeForm,
+                              customCurrency: e.target.value,
+                            })
+                          }
+                        >
+                          {CURRENCIES.map((c) => (
+                            <option key={c} value={c}>
+                              {c}
+                            </option>
+                          ))}
                         </select>
                       </div>
                     </div>
                   )}
                   <div className="pt-4 flex gap-3">
-                    <button type="button" onClick={() => setModalType(null)} className="flex-1 bg-gray-100 text-gray-700 py-2 rounded-lg font-bold hover:bg-gray-200 transition-colors">取消</button>
-                    <button type="submit" className="flex-1 bg-blue-600 text-white py-2 rounded-lg font-bold shadow-md hover:bg-blue-700 transition-colors">{tagGroups.length > 0 ? '下一步: 选标签' : '确认买入'}</button>
+                    <button
+                      type="button"
+                      onClick={() => setModalType(null)}
+                      className="flex-1 bg-gray-100 text-gray-700 py-2 rounded-lg font-bold hover:bg-gray-200 transition-colors"
+                    >
+                      取消
+                    </button>
+                    <button
+                      type="submit"
+                      className="flex-1 bg-blue-600 text-white py-2 rounded-lg font-bold shadow-md hover:bg-blue-700 transition-colors"
+                    >
+                      {tagGroups.length > 0 ? '下一步: 选标签' : '确认买入'}
+                    </button>
                   </div>
                 </div>
               ) : (
                 <div className="space-y-4">
-                  <p className="text-sm text-gray-500 mb-4">为 <span className="font-bold text-blue-600">{tradeForm.symbol}</span> 贴上标签，方便在饼图里统计。</p>
+                  <p className="text-sm text-gray-500 mb-4">
+                    为{' '}
+                    <span className="font-bold text-blue-600">
+                      {tradeForm.symbol}
+                    </span>{' '}
+                    贴上标签，方便在饼图里统计。
+                  </p>
                   {tagGroups.map((group: any) => (
                     <div key={group.id}>
-                      <label className="block text-sm font-semibold mb-1">{group.name}</label>
-                      <select className="w-full border rounded-lg p-2 outline-none bg-gray-50" value={tradeForm.tags[group.name] || ''} onChange={(e) => setTradeForm({ ...tradeForm, tags: { ...tradeForm.tags, [group.name]: e.target.value } })}>
+                      <label className="block text-sm font-semibold mb-1">
+                        {group.name}
+                      </label>
+                      <select
+                        className="w-full border rounded-lg p-2 outline-none bg-gray-50"
+                        value={tradeForm.tags[group.name] || ''}
+                        onChange={(e) =>
+                          setTradeForm({
+                            ...tradeForm,
+                            tags: {
+                              ...tradeForm.tags,
+                              [group.name]: e.target.value,
+                            },
+                          })
+                        }
+                      >
                         <option value="">未分类</option>
-                        {group.values.map((v: string) => <option key={v} value={v}>{v}</option>)}
+                        {group.values.map((v: string) => (
+                          <option key={v} value={v}>
+                            {v}
+                          </option>
+                        ))}
                       </select>
                     </div>
                   ))}
                   <div className="pt-6 flex gap-3">
-                    <button type="button" onClick={() => setTradeStep(1)} className="flex-1 bg-gray-100 text-gray-700 py-2 rounded-lg font-bold hover:bg-gray-200 transition-colors">← 上一步</button>
-                    <button type="submit" className="flex-1 bg-blue-600 text-white py-2 rounded-lg font-bold shadow-md hover:bg-blue-700 transition-colors">确认买入</button>
+                    <button
+                      type="button"
+                      onClick={() => setTradeStep(1)}
+                      className="flex-1 bg-gray-100 text-gray-700 py-2 rounded-lg font-bold hover:bg-gray-200 transition-colors"
+                    >
+                      ← 上一步
+                    </button>
+                    <button
+                      type="submit"
+                      className="flex-1 bg-blue-600 text-white py-2 rounded-lg font-bold shadow-md hover:bg-blue-700 transition-colors"
+                    >
+                      确认买入
+                    </button>
                   </div>
                 </div>
               )}
