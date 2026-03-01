@@ -67,7 +67,7 @@ export default function PortfolioApp() {
   const [snapshots, setSnapshots] = useState([]);
 
   const [liveData, setLiveData] = useState({});
-  const [rates, setRates] = useState({ USD: 1 });
+  const [rates, setRates] = useState<Record<string, number>>({ USD: 1 });
 
   // 修改：允许多个维度同时选中，用于渲染多个饼图
   const [allocDims, setAllocDims] = useState(['holding']);
