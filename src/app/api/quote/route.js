@@ -10,7 +10,7 @@ export async function GET(request) {
     return NextResponse.json({ error: '请提供代码' }, { status: 400 });
 
   try {
-    const quote = await yahooFinance.quote(symbol);
+    const quote = await yahooFinance.quote(symbol, {}, { validateResult: false });
 
     const currentPrice = quote.regularMarketPrice;
     const previousClose = quote.regularMarketPreviousClose;
