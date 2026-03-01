@@ -91,11 +91,12 @@ export default function PortfolioApp() {
     amount: '',
   });
 
-  useEffect(() => {
-    const load = (k, def) => {
-      const s = localStorage.getItem(k);
-      return s ? JSON.parse(s) : def;
-    };
+useEffect(() => {
+  // 为参数 k 指定 string 类型，为 def 指定 any 类型
+  const load = (k: string, def: any) => {
+    const s = localStorage.getItem(k);
+    return s ? JSON.parse(s) : def;
+  };
     const savedSet = load('pf_set', null);
     setSettings({
       baseCurrency: savedSet?.baseCurrency || 'USD',
